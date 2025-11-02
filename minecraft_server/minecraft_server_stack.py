@@ -353,6 +353,16 @@ def handler(event, context):
             },
         )
 
+        # Grant Lambda functions permission to update ECS service
+        service_arn = f"arn:aws:ecs:{self.region}:{self.account}:service/{cluster.cluster_name}/{service.service_name}"
+        for fn in [start_task_lambda, stop_task_lambda]:
+            fn.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["ecs:UpdateService"],
+                    resources=[service_arn],
+                )
+            )
+
         # Lambda for Route53 update (optional)
         update_dns_lambda = lambda_.Function(
             self,
