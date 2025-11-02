@@ -1,0 +1,10 @@
+{
+  "account": "123456789012",
+  "region": "us-east-1",
+  "minecraft": {
+    "server_size": "small",
+    "enable_route53": false,
+    "hosted_zone_id": "",
+    "domain_name": ""
+  }
+}
