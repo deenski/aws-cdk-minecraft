@@ -34,6 +34,7 @@ class MinecraftServerStack(Stack):
         enable_route53 = config.get("enable_route53", False)
         hosted_zone_id = config.get("hosted_zone_id", "")
         domain_name = config.get("domain_name", "")
+        custom_variables = config.get("variables", {})
         
         # Server sizing
         server_configs = {
@@ -81,7 +82,8 @@ class MinecraftServerStack(Stack):
             self,
             "MinecraftCluster",
             vpc=vpc,
-            container_insights=False,  # Disable to save costs
+            container_insights=False,  # Disabled to save costs
+            cluster_name="MinecraftECSCluster",
         )
 
         # Task execution role
@@ -125,8 +127,10 @@ class MinecraftServerStack(Stack):
             environment={
                 "EULA": "TRUE",
                 "VERSION": "LATEST",
-                "MEMORY": f"{int(server_config['memory'] * 0.8)}M",
+                "MEMORY": f"{int(server_config['memory'] * 0.8)}M", # 80% of task memory for JVM heap
                 "S3_BUCKET": backup_bucket.bucket_name,
+                "S3_BACKUP_INTERVAL": "300",  # Seconds
+                **custom_variables, # Additional user-defined variables
             },
             # No port_mappings here; handled at service level for awsvpc
         )
