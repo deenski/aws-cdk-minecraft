@@ -10,6 +10,7 @@ Cost-Optimized Minecraft Server on AWS
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apigatewayv2 as apigw
 from aws_cdk import aws_apigatewayv2_integrations as integrations
+from aws_cdk import aws_budgets as budgets
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_events as events
@@ -35,12 +36,29 @@ class MinecraftServerStack(Stack):
         hosted_zone_id = config.get("hosted_zone_id", "")
         domain_name = config.get("domain_name", "")
         custom_variables = config.get("variables", {})
+        budget_email = config.get("budget_email", "")
+        budget_amount = config.get("budget_amount", None)
         
-        # Server sizing
+        # Server sizing with budget thresholds
         server_configs = {
-            "small": {"cpu": 2048, "memory": 4096, "description": "1-5 players"},
-            "medium": {"cpu": 2048, "memory": 8192, "description": "5-10 players"},
-            "large": {"cpu": 4096, "memory": 16384, "description": "10-20 players"},
+            "small": {
+                "cpu": 2048,
+                "memory": 4096,
+                "description": "1-5 players",
+                "monthly_budget": budget_amount,  # USD per month
+            },
+            "medium": {
+                "cpu": 2048,
+                "memory": 8192,
+                "description": "5-10 players",
+                "monthly_budget": budget_amount, 
+            },
+            "large": {
+                "cpu": 4096,
+                "memory": 16384,
+                "description": "10-20 players",
+                "monthly_budget": budget_amount,
+            },
         }
         server_config = server_configs[server_size]
 
@@ -130,7 +148,7 @@ class MinecraftServerStack(Stack):
                 "MEMORY": f"{int(server_config['memory'] * 0.8)}M", # 80% of task memory for JVM heap
                 "S3_BUCKET": backup_bucket.bucket_name,
                 "S3_BACKUP_INTERVAL": "300",  # Seconds
-                **custom_variables, # Additional user-defined variables
+                **custom_variables, # Additional user-defined variablesy
             },
             # No port_mappings here; handled at service level for awsvpc
         )
@@ -611,6 +629,66 @@ def handler(event, context):
             enabled=False,  # Enable manually when server is running
         )
 
+        # Budget alerts based on server size
+        if budget_email:
+            budget = budgets.CfnBudget(
+                self,
+                "MinecraftBudget",
+                budget=budgets.CfnBudget.BudgetDataProperty(
+                    budget_name=f"MinecraftServer-{server_size}",
+                    budget_type="COST",
+                    time_unit="MONTHLY",
+                    budget_limit=budgets.CfnBudget.SpendProperty(
+                        amount=server_config["monthly_budget"],
+                        unit="USD",
+                    ),
+                ),
+                notifications_with_subscribers=[
+                    budgets.CfnBudget.NotificationWithSubscribersProperty(
+                        notification=budgets.CfnBudget.NotificationProperty(
+                            comparison_operator="GREATER_THAN",
+                            notification_type="ACTUAL",
+                            threshold=80,
+                            threshold_type="PERCENTAGE",
+                        ),
+                        subscribers=[
+                            budgets.CfnBudget.SubscriberProperty(
+                                address=budget_email,
+                                subscription_type="EMAIL",
+                            )
+                        ],
+                    ),
+                    budgets.CfnBudget.NotificationWithSubscribersProperty(
+                        notification=budgets.CfnBudget.NotificationProperty(
+                            comparison_operator="GREATER_THAN",
+                            notification_type="ACTUAL",
+                            threshold=100,
+                            threshold_type="PERCENTAGE",
+                        ),
+                        subscribers=[
+                            budgets.CfnBudget.SubscriberProperty(
+                                address=budget_email,
+                                subscription_type="EMAIL",
+                            )
+                        ],
+                    ),
+                    budgets.CfnBudget.NotificationWithSubscribersProperty(
+                        notification=budgets.CfnBudget.NotificationProperty(
+                            comparison_operator="GREATER_THAN",
+                            notification_type="FORECASTED",
+                            threshold=100,
+                            threshold_type="PERCENTAGE",
+                        ),
+                        subscribers=[
+                            budgets.CfnBudget.SubscriberProperty(
+                                address=budget_email,
+                                subscription_type="EMAIL",
+                            )
+                        ],
+                    ),
+                ],
+            )
+
         # Outputs
         api_url = http_api.url or "N/A"
         
@@ -655,3 +733,18 @@ def handler(event, context):
             value=f"{server_size} ({server_config['description']})",
             description="Server size configuration",
         )
+
+        if budget_email:
+            CfnOutput(
+                self,
+                "MonthlyBudget",
+                value=f"${server_config['monthly_budget']} USD/month",
+                description="Monthly budget with alerts at 80%, 100% actual, and 100% forecasted",
+            )
+
+            CfnOutput(
+                self,
+                "BudgetEmail",
+                value=budget_email,
+                description="Email address for budget alerts",
+            )
