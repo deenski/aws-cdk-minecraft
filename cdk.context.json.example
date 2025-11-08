@@ -11,10 +11,9 @@
     "budget_amount": 10,
     "allowed_cidrs": ["0.0.0.0/0"],
     "variables": {
-      # this is where you supply any other variables you want and delete this line, for example:
       "MOTD": "Terraria Server - Welcome!",
       "TYPE": "AUTO_CURSEFORGE",
-      "CF_API_KEY": "abcdlol"d,
+      "CF_API_KEY": "abcdlol",
       "CF_SLUG": "better-mc-forge-bmc4"
     }
   }
