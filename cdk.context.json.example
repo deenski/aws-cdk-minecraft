@@ -9,6 +9,12 @@
     "domain_name": "",
     "budget_email": "your-email@example.com",
     "budget_amount": 10,
-    "variables": {}
+    "allowed_cidrs": ["0.0.0.0/0"],
+    "variables": {
+      "MOTD": "Terraria Server - Welcome!",
+      "TYPE": "AUTO_CURSEFORGE",
+      "CF_API_KEY": "abcdlol",
+      "CF_SLUG": "better-mc-forge-bmc4"
+    }
   }
 }
