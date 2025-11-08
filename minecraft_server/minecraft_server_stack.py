@@ -37,7 +37,9 @@ class MinecraftServerStack(Stack):
         domain_name = config.get("domain_name", "")
         custom_variables = config.get("variables", {})
         budget_email = config.get("budget_email", "")
-        budget_amount = config.get("budget_amount", None)
+        budget_amount = config.get("budget_amount", 10)
+        allowed_cidrs = config.get("allowed_cidrs", ["0.0.0.0/0"])
+
         
         # Server sizing with budget thresholds
         server_configs = {
@@ -148,7 +150,7 @@ class MinecraftServerStack(Stack):
                 "MEMORY": f"{int(server_config['memory'] * 0.8)}M", # 80% of task memory for JVM heap
                 "S3_BUCKET": backup_bucket.bucket_name,
                 "S3_BACKUP_INTERVAL": "300",  # Seconds
-                **custom_variables, # Additional user-defined variablesy
+                **custom_variables, # Additional user-defined variables
             },
             # No port_mappings here; handled at service level for awsvpc
         )
@@ -161,11 +163,12 @@ class MinecraftServerStack(Stack):
             description="Allow Minecraft traffic",
             allow_all_outbound=True,
         )
-        security_group.add_ingress_rule(
-            ec2.Peer.any_ipv4(),
-            ec2.Port.tcp(25565),
-            "Minecraft server port",
-        )
+        for cidr in allowed_cidrs:
+            security_group.add_ingress_rule(
+                ec2.Peer.any_ipv4(),
+                ec2.Port.tcp(25565),
+                "Minecraft server port",
+            )
 
         # ECS Fargate Service (awsvpc network mode)
         service = ecs.FargateService(
@@ -189,7 +192,7 @@ class MinecraftServerStack(Stack):
             handler="index.handler",
             timeout=Duration.seconds(30),
             code=lambda_.Code.from_inline(
-                """
+                f"""
 import boto3
 import os
 
@@ -197,12 +200,25 @@ def handler(event, context):
     ecs = boto3.client('ecs')
     cluster = os.environ['CLUSTER_NAME']
     service = os.environ['SERVICE_NAME']
-    ecs.update_service(
-        cluster=cluster,
-        service=service,
-        desiredCount=1
-    )
-    return {'statusCode': 200, 'message': 'Server started'}
+    
+    try:
+        ecs.update_service(
+            cluster=cluster,
+            service=service,
+            desiredCount=1
+        )
+        
+        return {{
+            'statusCode': 200,
+            'message': 'Server starting',
+            'cluster': cluster
+        }}
+    except Exception as e:
+        print(f"Error starting server: {{e}}")
+        return {{
+            'statusCode': 500,
+            'error': str(e)
+        }}
 """
             ),
             environment={
@@ -231,9 +247,9 @@ def handler(event, context):
             "GetIPFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="index.handler",
-            timeout=Duration.seconds(30),
+            timeout=Duration.seconds(120),  # Increased timeout for waiter
             code=lambda_.Code.from_inline(
-                """
+                f"""
 import boto3
 import time
 
@@ -241,47 +257,69 @@ ecs = boto3.client('ecs')
 ec2 = boto3.client('ec2')
 
 def handler(event, context):
-    cluster = event['cluster']
-    task_arn = event['taskArn']
-    
-    # Wait for task to be running
-    waiter = ecs.get_waiter('tasks_running')
-    waiter.wait(
-        cluster=cluster,
-        tasks=[task_arn],
-        WaiterConfig={'Delay': 6, 'MaxAttempts': 20}
-    )
-    
-    # Get task details
-    response = ecs.describe_tasks(cluster=cluster, tasks=[task_arn])
-    task = response['tasks'][0]
-    
-    # Get ENI and public IP
-    eni_id = None
-    for attachment in task.get('attachments', []):
-        for detail in attachment.get('details', []):
-            if detail['name'] == 'networkInterfaceId':
-                eni_id = detail['value']
-                break
-    
-    if eni_id:
-        eni_response = ec2.describe_network_interfaces(NetworkInterfaceIds=[eni_id])
-        public_ip = eni_response['NetworkInterfaces'][0].get('Association', {}).get('PublicIp', '')
+    try:
+        cluster = event.get('cluster', '{cluster.cluster_name}')
         
-        return {
-            'statusCode': 200,
-            'publicIp': public_ip,
-            'taskArn': task_arn
-        }
-    
-    return {'statusCode': 500, 'error': 'No IP found'}
+        # List running tasks for the service
+        tasks_response = ecs.list_tasks(
+            cluster=cluster,
+            serviceName='{service.service_name}',
+            desiredStatus='RUNNING'
+        )
+        
+        if not tasks_response.get('taskArns'):
+            return {{
+                'statusCode': 404,
+                'error': 'No running tasks found'
+            }}
+        
+        task_arn = tasks_response['taskArns'][0]
+        
+        # Wait for task to be running
+        waiter = ecs.get_waiter('tasks_running')
+        waiter.wait(
+            cluster=cluster,
+            tasks=[task_arn],
+            WaiterConfig={{'Delay': 6, 'MaxAttempts': 20}}
+        )
+        
+        # Get task details
+        response = ecs.describe_tasks(cluster=cluster, tasks=[task_arn])
+        task = response['tasks'][0]
+        
+        # Get ENI and public IP
+        eni_id = None
+        for attachment in task.get('attachments', []):
+            for detail in attachment.get('details', []):
+                if detail['name'] == 'networkInterfaceId':
+                    eni_id = detail['value']
+                    break
+        
+        if eni_id:
+            eni_response = ec2.describe_network_interfaces(NetworkInterfaceIds=[eni_id])
+            public_ip = eni_response['NetworkInterfaces'][0].get('Association', {{}}).get('PublicIp', '')
+            
+            return {{
+                'statusCode': 200,
+                'publicIp': public_ip,
+                'taskArn': task_arn,
+                'cluster': cluster
+            }}
+        
+        return {{'statusCode': 500, 'error': 'No IP found'}}
+    except Exception as e:
+        print(f"Error getting IP: {{e}}")
+        return {{
+            'statusCode': 500,
+            'error': str(e)
+        }}
 """
             ),
         )
 
         get_ip_lambda.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["ecs:DescribeTasks"],
+                actions=["ecs:DescribeTasks", "ecs:ListTasks"],
                 resources=["*"],
             )
         )
@@ -453,7 +491,6 @@ def handler(event, context):
             "StartTask",
             lambda_function=start_task_lambda,
             result_path="$.taskInfo",
-            output_path="$.taskInfo.Payload",
         )
 
         wait_for_task = sfn.Wait(
@@ -466,18 +503,31 @@ def handler(event, context):
             self,
             "GetIP",
             lambda_function=get_ip_lambda,
+            payload=sfn.TaskInput.from_object({
+                "cluster": sfn.JsonPath.string_at("$.taskInfo.Payload.cluster")
+            }),
             result_path="$.ipInfo",
-            output_path="$.ipInfo.Payload",
         )
 
         update_dns_step = tasks.LambdaInvoke(
             self,
             "UpdateDNS",
             lambda_function=update_dns_lambda,
+            payload=sfn.TaskInput.from_object({
+                "publicIp": sfn.JsonPath.string_at("$.ipInfo.Payload.publicIp")
+            }),
             result_path="$.dnsInfo",
         )
 
-        server_ready = sfn.Succeed(self, "ServerReady")
+        server_ready = sfn.Pass(
+            self,
+            "ServerReady",
+            parameters={
+                "status": "ready",
+                "publicIp": sfn.JsonPath.string_at("$.ipInfo.Payload.publicIp"),
+                "taskArn": sfn.JsonPath.string_at("$.ipInfo.Payload.taskArn"),
+            }
+        )
 
         start_definition = (
             start_task_step
@@ -531,60 +581,119 @@ def handler(event, context):
                 f"""
 import boto3
 import json
+import time
 
 sfn = boto3.client('stepfunctions')
+ecs = boto3.client('ecs')
+ec2 = boto3.client('ec2')
+
+def get_task_ip(cluster, task_arn):
+    '''Helper function to get public IP of a task'''
+    try:
+        response = ecs.describe_tasks(cluster=cluster, tasks=[task_arn])
+        if not response.get('tasks'):
+            return None
+            
+        task = response['tasks'][0]
+        
+        # Get ENI ID
+        eni_id = None
+        for attachment in task.get('attachments', []):
+            for detail in attachment.get('details', []):
+                if detail['name'] == 'networkInterfaceId':
+                    eni_id = detail['value']
+                    break
+        
+        if eni_id:
+            eni_response = ec2.describe_network_interfaces(NetworkInterfaceIds=[eni_id])
+            return eni_response['NetworkInterfaces'][0].get('Association', {{}}).get('PublicIp', None)
+    except Exception as e:
+        print(f"Error getting IP: {{e}}")
+    return None
 
 def handler(event, context):
     action = event.get('pathParameters', {{}}).get('action', '')
+    cluster = '{cluster.cluster_name}'
     
-    if action == 'start':
-        response = sfn.start_execution(
-            stateMachineArn='{start_state_machine.state_machine_arn}',
-            input=json.dumps({{}})
-        )
-        return {{
-            'statusCode': 200,
-            'body': json.dumps({{'message': 'Server starting', 'executionArn': response['executionArn']}})
-        }}
-    elif action == 'stop':
-        # Get running tasks
-        ecs = boto3.client('ecs')
-        tasks = ecs.list_tasks(cluster='{cluster.cluster_name}', desiredStatus='RUNNING')
-        
-        if not tasks.get('taskArns'):
+    try:
+        if action == 'start':
+            response = sfn.start_execution(
+                stateMachineArn='{start_state_machine.state_machine_arn}',
+                input=json.dumps({{}})
+            )
             return {{
-                'statusCode': 404,
-                'body': json.dumps({{'error': 'No running server found'}})
+                'statusCode': 202,
+                'body': json.dumps({{
+                    'message': 'Server starting - please wait 2-3 minutes for IP assignment',
+                    'executionArn': response['executionArn'],
+                    'statusCheck': 'Use the /status endpoint to get the server IP'
+                }})
             }}
-        
-        task_arn = tasks['taskArns'][0]
-        response = sfn.start_execution(
-            stateMachineArn='{stop_state_machine.state_machine_arn}',
-            input=json.dumps({{'cluster': '{cluster.cluster_name}', 'taskArn': task_arn}})
-        )
-        return {{
-            'statusCode': 200,
-            'body': json.dumps({{'message': 'Server stopping', 'executionArn': response['executionArn']}})
-        }}
-    elif action == 'status':
-        ecs = boto3.client('ecs')
-        tasks = ecs.list_tasks(cluster='{cluster.cluster_name}', desiredStatus='RUNNING')
-        
-        if not tasks.get('taskArns'):
+            
+        elif action == 'stop':
+            tasks = ecs.list_tasks(cluster=cluster, desiredStatus='RUNNING')
+            
+            if not tasks.get('taskArns'):
+                return {{
+                    'statusCode': 404,
+                    'body': json.dumps({{'error': 'No running server found'}})
+                }}
+            
+            task_arn = tasks['taskArns'][0]
+            response = sfn.start_execution(
+                stateMachineArn='{stop_state_machine.state_machine_arn}',
+                input=json.dumps({{'cluster': cluster, 'taskArn': task_arn}})
+            )
             return {{
                 'statusCode': 200,
-                'body': json.dumps({{'status': 'stopped'}})
+                'body': json.dumps({{
+                    'message': 'Server stopping',
+                    'executionArn': response['executionArn']
+                }})
+            }}
+            
+        elif action == 'status':
+            tasks = ecs.list_tasks(cluster=cluster, desiredStatus='RUNNING')
+            
+            if not tasks.get('taskArns'):
+                return {{
+                    'statusCode': 200,
+                    'body': json.dumps({{
+                        'status': 'stopped',
+                        'message': 'No server is currently running'
+                    }})
+                }}
+            
+            task_arn = tasks['taskArns'][0]
+            public_ip = get_task_ip(cluster, task_arn)
+            
+            response_body = {{
+                'status': 'running',
+                'taskCount': len(tasks['taskArns']),
+                'taskArn': task_arn
+            }}
+            
+            if public_ip:
+                response_body['publicIp'] = public_ip
+                response_body['minecraftServer'] = f"{{public_ip}}:25565"
+            else:
+                response_body['message'] = 'Server is starting - IP not yet available'
+            
+            return {{
+                'statusCode': 200,
+                'body': json.dumps(response_body)
             }}
         
         return {{
-            'statusCode': 200,
-            'body': json.dumps({{'status': 'running', 'taskCount': len(tasks['taskArns'])}})
+            'statusCode': 400,
+            'body': json.dumps({{'error': 'Invalid action. Use /start, /stop, or /status'}})
         }}
-    
-    return {{
-        'statusCode': 400,
-        'body': json.dumps({{'error': 'Invalid action. Use /start, /stop, or /status'}})
-    }}
+    except Exception as e:
+        print(f"Error in API handler: {{e}}")
+        return {{
+            'statusCode': 500,
+            'body': json.dumps({{'error': str(e)}})
+        }}
 """
             ),
         )
@@ -600,7 +709,13 @@ def handler(event, context):
         )
         api_handler.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["ecs:ListTasks"],
+                actions=["ecs:ListTasks", "ecs:DescribeTasks"],
+                resources=["*"],
+            )
+        )
+        api_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ec2:DescribeNetworkInterfaces"],
                 resources=["*"],
             )
         )
