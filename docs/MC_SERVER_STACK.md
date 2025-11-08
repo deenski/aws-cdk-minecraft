@@ -181,13 +181,6 @@ Problem: Route53 record not updated
 Problem: Unexpected costs
 - Check CloudWatch metrics and AWS Cost Explorer. Look for prolonged Fargate runtime, large data transfer, or many backups.
 
-## Advanced topics and next steps
-
-- Persistent storage: the current stack uses S3 backups and ephemeral container storage. If you want always-mounted persistent storage, consider adding EFS and mounting it into the container. Pros: immediate persistence; Cons: higher cost and more complexity.
-- Auto-scaling: you can implement a server fleet with scaling policies, but most Minecraft setups prefer a single authoritative server per world.
-- CI/CD: add a pipeline to test and deploy stack changes using CodePipeline or GitHub Actions.
-- Secrets and parameters: move sensitive variables to Secrets Manager and inject them securely into the task definition.
-
 ## Example context snippet
 
 Add or edit `cdk.context.json` `minecraft` block:
