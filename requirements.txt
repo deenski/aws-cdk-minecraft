@@ -1,0 +1,7 @@
+# Minimal runtime requirements (generated from uv.lock top-level packages)
+# Add additional packages if your environment requires them.
+aws-cdk-lib==2.215.0
+constructs==10.4.2
+
+# Optional/dev packages (uncomment if you need them)
+# pytest==6.2.5

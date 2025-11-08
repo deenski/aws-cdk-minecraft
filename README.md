@@ -1,58 +1,36 @@
+# AWS CDK Minecraft Server (Python)
 
-# Welcome to your CDK Python project!
+This repository contains an AWS CDK (Python) project that deploys a cost-optimized
+Minecraft server on AWS using ECS Fargate, S3 backups, and related automation. It is far outside of the scope of this document to teach you how to use AWS. As such I assume no responsibility for the consequences your actions. 
 
-This is a blank project for CDK development with Python.
+Review `app.py` and `minecraft_server/minecraft_server_stack.py` for configuration and deployment details.
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+## Quick start
 
-This project is set up like a standard Python project.  The initialization
-process also creates a virtualenv within this project, stored under the `.venv`
-directory.  To create the virtualenv it assumes that there is a `python3`
-(or `python` for Windows) executable in your path with access to the `venv`
-package. If for any reason the automatic creation of the virtualenv fails,
-you can create the virtualenv manually.
+1. Configure any context values in `cdk.context.json` or use the example file
+	`cdk.context.json.example`.
+2. (Optional) Create and activate a virtualenv, then install deps.
+	```
+	python3 -m venv .venv
+	source .venv/bin/activate
+	pip install -r requirements.txt
+	```
+3. Synthesize and deploy:
+	```
+	cdk synth
+	cdk deploy
+	```
+4. Go play!
+5. `curl $MINECRAFT_HOST/stop`
+6. To play again: `curl $MINECRAFT_HOST/start`
 
-To manually create a virtualenv on MacOS and Linux:
+## More info
+The full documentation for this repo can be found in [docs/MC_SERVER_STACK.md](docs/MC_SERVER_STACK.md)
 
-```
-$ python3 -m venv .venv
-```
+### Credits
 
-After the init process completes and the virtualenv is created, you can use the following
-step to activate your virtualenv.
+This project uses the Docker image maintained by itzg: `itzg/minecraft-server`.
+For the full set of configuration options and runtime behavior for that image,
+see the upstream documentation:
 
-```
-$ source .venv/bin/activate
-```
-
-If you are a Windows platform, you would activate the virtualenv like this:
-
-```
-% .venv\Scripts\activate.bat
-```
-
-Once the virtualenv is activated, you can install the required dependencies.
-
-```
-$ pip install -r requirements.txt
-```
-
-At this point you can now synthesize the CloudFormation template for this code.
-
-```
-$ cdk synth
-```
-
-To add additional dependencies, for example other CDK libraries, just add
-them to your `setup.py` file and rerun the `pip install -r requirements.txt`
-command.
-
-## Useful commands
-
- * `cdk ls`          list all stacks in the app
- * `cdk synth`       emits the synthesized CloudFormation template
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk docs`        open CDK documentation
-
-Enjoy!
+https://docker-minecraft-server.readthedocs.io/en/latest/
